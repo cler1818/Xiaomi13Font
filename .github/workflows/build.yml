@@ -1,0 +1,26 @@
+name: Build portable packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build packages
+        shell: powershell
+        run: ./build.ps1 -Version $env:GITHUB_REF_NAME.TrimStart('v')
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Xiaomi13Font-packages
+          path: artifacts/*.zip

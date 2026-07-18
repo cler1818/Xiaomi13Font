@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.spec
+.venv/
+build/
+dist/
+artifacts/
+tools/platform-tools/
+Output/
+scripts/Output/
+test-output*/
+*.ttf
+*.otf
+*.ttc
+*.zip
+!.github/**/*.zip
