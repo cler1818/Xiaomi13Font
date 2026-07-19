@@ -1,6 +1,4 @@
-param(
-    [string]$Version = '1.2.0'
-)
+param([string]$Version = '1.3.0')
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -11,76 +9,44 @@ $Build = Join-Path $Root 'build'
 $Dist = Join-Path $Root 'dist'
 $Artifacts = Join-Path $Root 'artifacts'
 
-function Get-PlatformTools {
-    if (Test-Path -LiteralPath (Join-Path $PlatformTools 'adb.exe')) { return }
-    Write-Host 'Downloading official Android platform-tools...'
+if (-not (Test-Path -LiteralPath (Join-Path $PlatformTools 'adb.exe'))) {
     New-Item -ItemType Directory -Force -Path $Tools | Out-Null
-    $zip = Join-Path $Tools 'platform-tools.zip'
-    Invoke-WebRequest -Uri 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip' -OutFile $zip
-    Expand-Archive -LiteralPath $zip -DestinationPath $Tools -Force
-    Remove-Item -LiteralPath $zip -Force
+    $download = Join-Path $Tools 'platform-tools.zip'
+    Invoke-WebRequest 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip' -OutFile $download
+    Expand-Archive -LiteralPath $download -DestinationPath $Tools -Force
+    Remove-Item -LiteralPath $download -Force
 }
 
-Get-PlatformTools
 python -m pip install -r (Join-Path $Root 'requirements-build.txt')
-
 foreach ($path in @($Build, $Dist, $Artifacts)) {
     if (Test-Path -LiteralPath $path) {
         $resolved = (Resolve-Path -LiteralPath $path).Path
-        if (-not $resolved.StartsWith($Root, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Refusing to clean path outside project: $resolved"
-        }
+        if (-not $resolved.StartsWith($Root, [StringComparison]::OrdinalIgnoreCase)) { throw "拒绝清理项目外目录：$resolved" }
         Remove-Item -LiteralPath $resolved -Recurse -Force
     }
 }
 New-Item -ItemType Directory -Force -Path $Artifacts | Out-Null
 
-$binaryArgs = @()
-foreach ($name in @('adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll')) {
-    $path = Join-Path $PlatformTools $name
-    if (Test-Path -LiteralPath $path) {
-        $binaryArgs += '--add-binary'
-        $binaryArgs += "$path;tools/platform-tools"
-    }
-}
+python -m PyInstaller --noconfirm --clean --onedir --windowed --name FontModuleMaker `
+    --distpath $Dist --workpath $Build --specpath $Build --paths (Join-Path $Root 'src') `
+    --collect-submodules fontTools.ttLib.tables --hidden-import fontTools.cffLib `
+    (Join-Path $Root 'src\font_module_maker.py')
 
-$pyinstallerArgs = @(
-    '--noconfirm',
-    '--clean',
-    '--onedir',
-    '--windowed',
-    '--name', 'Xiaomi13Font',
-    '--distpath', $Dist,
-    '--workpath', $Build,
-    '--specpath', $Build,
-    '--collect-all', 'fontTools'
-) + $binaryArgs + @(
-    (Join-Path $Root 'src\xiaomi13font_tool.py')
-)
+$Portable = Join-Path $Dist 'Xiaomi13Font-Portable'
+Move-Item -LiteralPath (Join-Path $Dist 'FontModuleMaker') -Destination $Portable
+Copy-Item -LiteralPath $PlatformTools -Destination (Join-Path $Portable 'adb') -Recurse
+New-Item -ItemType Directory -Force -Path (Join-Path $Portable 'source'),(Join-Path $Portable 'ExportedModules') | Out-Null
+Copy-Item -LiteralPath (Join-Path $Root 'src\module_core.py'),(Join-Path $Root 'src\font_module_maker.py'),(Join-Path $Root 'requirements-build.txt') -Destination (Join-Path $Portable 'source')
+Copy-Item -LiteralPath (Join-Path $Root 'README.md'),(Join-Path $Root 'DEVICE.md') -Destination $Portable
 
-python -m PyInstaller @pyinstallerArgs
-
-$PortableDir = Join-Path $Dist 'Xiaomi13Font'
-Copy-Item -LiteralPath (Join-Path $Root 'README.md') -Destination $PortableDir
-Copy-Item -LiteralPath (Join-Path $Root 'DEVICE.md') -Destination $PortableDir
-Copy-Item -LiteralPath (Join-Path $Root 'THIRD_PARTY_NOTICES.md') -Destination $PortableDir
+$Script = Join-Path $Artifacts 'Xiaomi13Font-Script'
+New-Item -ItemType Directory -Force -Path $Script,(Join-Path $Script 'ExportedModules') | Out-Null
+Copy-Item -LiteralPath (Join-Path $Root 'scripts\FontModuleMaker.ps1'),(Join-Path $Root 'scripts\FontModuleMaker.cmd'),(Join-Path $Root 'README.md'),(Join-Path $Root 'DEVICE.md') -Destination $Script
+Copy-Item -LiteralPath $PlatformTools -Destination (Join-Path $Script 'adb') -Recurse
 
 $PortableZip = Join-Path $Artifacts "Xiaomi13Font-Portable-v$Version.zip"
-Push-Location $PortableDir
-try { tar -a -cf $PortableZip * } finally { Pop-Location }
-
-$ScriptDir = Join-Path $Artifacts 'Xiaomi13Font-Script'
-New-Item -ItemType Directory -Force -Path $ScriptDir | Out-Null
-Copy-Item -LiteralPath (Join-Path $Root 'scripts\Xiaomi13Font.cmd') -Destination $ScriptDir
-Copy-Item -LiteralPath (Join-Path $Root 'scripts\Xiaomi13Font.ps1') -Destination $ScriptDir
-Copy-Item -LiteralPath (Join-Path $Root 'README.md') -Destination $ScriptDir
-Copy-Item -LiteralPath (Join-Path $Root 'DEVICE.md') -Destination $ScriptDir
-New-Item -ItemType Directory -Force -Path (Join-Path $ScriptDir 'tools') | Out-Null
-Copy-Item -LiteralPath $PlatformTools -Destination (Join-Path $ScriptDir 'tools') -Recurse
-
 $ScriptZip = Join-Path $Artifacts "Xiaomi13Font-Script-v$Version.zip"
-Push-Location $ScriptDir
-try { tar -a -cf $ScriptZip * } finally { Pop-Location }
-
-Write-Host "Built: $PortableZip" -ForegroundColor Green
-Write-Host "Built: $ScriptZip" -ForegroundColor Green
+tar -a -cf $PortableZip -C $Dist (Split-Path $Portable -Leaf)
+tar -a -cf $ScriptZip -C $Artifacts (Split-Path $Script -Leaf)
+Write-Host "Built: $PortableZip"
+Write-Host "Built: $ScriptZip"
