@@ -19,7 +19,7 @@ from fontTools.ttLib import TTFont
 
 
 APP_NAME = "Xiaomi13Font"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 AUTHOR = "lzhp529"
 MODULE_ID = "xiaomi13_fuxi_global_font"
 DEVICE_CODENAME = "fuxi"
@@ -208,6 +208,82 @@ set_perm_recursive "$MODPATH" 0 0 0755 0644
 '''
 
 
+def overlay_compat_service_script(include_clock: bool) -> str:
+    system_aliases = "\n".join(SYSTEM_ALIASES)
+    product_aliases = "\n".join(PRODUCT_ALIASES if include_clock else [])
+    return f'''#!/system/bin/sh
+
+MODDIR="${{0%/*}}"
+FONT="$MODDIR/system/fonts/Xiaomi13GlobalFont.ttf"
+LOG="$MODDIR/overlay-compat.log"
+OVERLAY_MOD="/data/adb/modules/cler1818_full_system_overlayfs"
+OVERLAY_LOG="$OVERLAY_MOD/overlay.log"
+
+exec >>"$LOG" 2>&1
+echo "==== $(date '+%F %T') OverlayFS delayed font compatibility ===="
+
+until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 2; done
+
+if [ -d "$OVERLAY_MOD" ] && [ ! -f "$OVERLAY_MOD/disable" ] && [ ! -f "$OVERLAY_MOD/remove" ]; then
+  echo "OverlayFS module detected; waiting for health check"
+  WAITED=0
+  while [ "$WAITED" -lt 180 ]; do
+    if grep -q "健康检查通过" "$OVERLAY_LOG" 2>/dev/null; then
+      echo "OverlayFS health check passed after ${{WAITED}}s"
+      break
+    fi
+    sleep 2
+    WAITED=$((WAITED + 2))
+  done
+  [ "$WAITED" -ge 180 ] && echo "OverlayFS wait timed out; continuing safely"
+  sleep 5
+else
+  echo "OverlayFS module absent or disabled; using normal delayed bind"
+  sleep 8
+fi
+
+if [ ! -f "$FONT" ]; then
+  echo "ERROR: font file missing: $FONT"
+  exit 1
+fi
+
+SYSTEM_ALIASES="
+{system_aliases}
+"
+PRODUCT_ALIASES="
+{product_aliases}
+"
+SEEN="|"
+OK=0
+SKIP=0
+FAIL=0
+
+bind_one() {{
+  ENTRY="$1"
+  [ -e "$ENTRY" ] || {{ echo "SKIP missing: $ENTRY"; SKIP=$((SKIP + 1)); return; }}
+  TARGET="$(readlink -f "$ENTRY" 2>/dev/null)"
+  [ -n "$TARGET" ] && [ -f "$TARGET" ] || {{ echo "SKIP unresolved: $ENTRY"; SKIP=$((SKIP + 1)); return; }}
+  case "$SEEN" in *"|$TARGET|"*) echo "SKIP duplicate: $ENTRY -> $TARGET"; return ;; esac
+  SEEN="${{SEEN}}${{TARGET}}|"
+  if mount --bind "$FONT" "$TARGET"; then
+    echo "OK: $ENTRY -> $TARGET"
+    OK=$((OK + 1))
+  else
+    echo "FAIL: $ENTRY -> $TARGET"
+    FAIL=$((FAIL + 1))
+  fi
+}}
+
+for NAME in $SYSTEM_ALIASES; do bind_one "/system/fonts/$NAME"; done
+for NAME in $PRODUCT_ALIASES; do
+  bind_one "/product/fonts/$NAME"
+  bind_one "/system/product/fonts/$NAME"
+done
+
+echo "Completed: ok=$OK skip=$SKIP fail=$FAIL"
+'''
+
+
 def zip_text_entry(zf: zipfile.ZipFile, name: str, content: str, mode: int = 0o644) -> None:
     info = zipfile.ZipInfo(name, datetime.now().timetuple()[:6])
     info.create_system = 3
@@ -225,7 +301,12 @@ def zip_file_entry(zf: zipfile.ZipFile, name: str, source: Path, mode: int = 0o6
         shutil.copyfileobj(src, dst, length=1024 * 1024)
 
 
-def generate_module(font_path: Path, output_dir: Path, include_clock: bool = True) -> tuple[Path, FontInfo]:
+def generate_module(
+    font_path: Path,
+    output_dir: Path,
+    include_clock: bool = True,
+    overlay_compat: bool = True,
+) -> tuple[Path, FontInfo]:
     info = analyze_font(font_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     display_name = clean_prop_value(info.full_name or info.family or font_path.stem)
@@ -249,6 +330,8 @@ description=适配小米13 fuxi / MIUI 14.0.5 / Android 14 的全局字体模块
         zip_text_entry(zf, "module.prop", module_prop)
         zip_text_entry(zf, "system.prop", "ro.miui.ui.font.mi_font_path=null\n")
         zip_text_entry(zf, "customize.sh", module_customize_script(include_clock), 0o755)
+        if overlay_compat:
+            zip_text_entry(zf, "service.sh", overlay_compat_service_script(include_clock), 0o755)
         zip_file_entry(zf, "system/fonts/Xiaomi13GlobalFont.ttf", font_path)
     with zipfile.ZipFile(temp_path, "r") as zf:
         names = zf.namelist()
@@ -264,6 +347,8 @@ description=适配小米13 fuxi / MIUI 14.0.5 / Android 14 的全局字体模块
         missing = sorted(required.difference(names))
         if missing:
             raise RuntimeError(f"模块缺少必要文件：{', '.join(missing)}")
+        if overlay_compat and "service.sh" not in names:
+            raise RuntimeError("模块缺少 OverlayFS 延迟兼容脚本：service.sh")
     if output_path.exists():
         output_path.unlink()
     temp_path.replace(output_path)
@@ -372,6 +457,7 @@ class Xiaomi13FontApp(tk.Tk):
         self.font_path = tk.StringVar()
         self.output_dir = tk.StringVar(value=str(Path.home() / "Documents" / "Xiaomi13Font" / "Output"))
         self.include_clock = tk.BooleanVar(value=True)
+        self.overlay_compat = tk.BooleanVar(value=True)
         self.info_text = tk.StringVar(value="尚未选择字体")
         self.current_info: FontInfo | None = None
         self._build_ui()
@@ -406,6 +492,11 @@ class Xiaomi13FontApp(tk.Tk):
         ttk.Entry(output_row, textvariable=self.output_dir).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(output_row, text="选择目录", command=self.choose_output_dir).pack(side=tk.LEFT, padx=(10, 0))
         ttk.Checkbutton(output_box, text="同时覆盖小米锁屏/时钟字体（全局模式，默认开启）", variable=self.include_clock).pack(anchor=tk.W, pady=(10, 0))
+        ttk.Checkbutton(
+            output_box,
+            text="OverlayFS 延迟兼容模式（检测全系统 OverlayFS，默认开启）",
+            variable=self.overlay_compat,
+        ).pack(anchor=tk.W, pady=(6, 0))
 
         action_box = ttk.LabelFrame(main, text="3. 生成与安装", padding=12)
         action_box.pack(fill=tk.X, pady=(12, 0))
@@ -471,16 +562,24 @@ class Xiaomi13FontApp(tk.Tk):
             return
         output_dir = Path(self.output_dir.get().strip().strip('"'))
         include_clock = bool(self.include_clock.get())
+        overlay_compat = bool(self.overlay_compat.get())
         threading.Thread(
             target=self._run_action,
-            args=(action, path, output_dir, include_clock),
+            args=(action, path, output_dir, include_clock, overlay_compat),
             daemon=True,
         ).start()
 
-    def _run_action(self, action: str, font_path: Path, output_dir: Path, include_clock: bool) -> None:
+    def _run_action(
+        self,
+        action: str,
+        font_path: Path,
+        output_dir: Path,
+        include_clock: bool,
+        overlay_compat: bool,
+    ) -> None:
         try:
             self.thread_log("正在生成模块……")
-            module_path, info = generate_module(font_path, output_dir, include_clock)
+            module_path, info = generate_module(font_path, output_dir, include_clock, overlay_compat)
             self.thread_log(f"生成成功：{module_path}")
             self.thread_log(f"字体字形数量：{info.glyph_count:,}")
             if action == "copy":

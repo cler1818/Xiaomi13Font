@@ -57,6 +57,21 @@
 
 ## 兼容性边界
 
+### 全系统 OverlayFS
+
+本机安装的 `cler1818_full_system_overlayfs` 会在开机完成后较晚挂载 `/system`、`/product` 等 OverlayFS。普通 Magisk 字体模块的文件挂载发生得更早，因此可能先显示自定义字体，随后又被 OverlayFS 的系统快照遮住。应用已经缓存的字体还会暂时保留，造成“过一段时间、重新进入页面后恢复默认字体”的现象。
+
+v1.1.0 模块增加根目录 `service.sh`：等待 OverlayFS 健康检查完成后，对当前系统中真实存在的字体目标执行延迟 bind mount；符号链接先经 `readlink -f` 解析，并对相同目标去重。执行结果写入模块目录的 `overlay-compat.log`。
+
+该模式专门验证于：
+
+- 小米 13 / fuxi
+- MIUI 14.0.5.0.UMCCNXM / Android 14
+- Magisk Alpha e8a58776-alpha / 30700
+- `cler1818_full_system_overlayfs`
+
+兼容脚本不会修改 OverlayFS 模块本身，也不会自动重启设备。
+
 本工具安装脚本要求：
 
 ```text
