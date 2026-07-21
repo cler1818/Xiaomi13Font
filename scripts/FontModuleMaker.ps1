@@ -189,42 +189,95 @@ LOG="$MODDIR/overlay-compat.log"
 OVERLAY_MOD="/data/adb/modules/cler1818_full_system_overlayfs"
 OVERLAY_LOG="$OVERLAY_MOD/overlay.log"
 exec >>"$LOG" 2>&1
-echo "==== $(date '+%F %T') OverlayFS delayed font compatibility ===="
+echo "==== $(date '+%F %T') OverlayFS delayed font compatibility v1.4 ===="
 until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 2; done
+[ -f "$FONT" ] || { echo "ERROR: font missing: $FONT"; exit 1; }
+
+NOW_EPOCH="$(date +%s)"
+UPTIME_SEC="$(awk '{print int($1)}' /proc/uptime 2>/dev/null)"
+[ -n "$UPTIME_SEC" ] || UPTIME_SEC=0
+BOOT_EPOCH=$((NOW_EPOCH - UPTIME_SEC - 5))
+
+overlay_ready() {
+  LOG_MTIME="$(stat -c %Y "$OVERLAY_LOG" 2>/dev/null)"
+  [ -n "$LOG_MTIME" ] && [ "$LOG_MTIME" -ge "$BOOT_EPOCH" ] || return 1
+  tail -n 80 "$OVERLAY_LOG" 2>/dev/null | grep -q "健康检查通过" || return 1
+  grep -q "overlay cler1818_full_overlayfs_system " /proc/self/mountinfo || return 1
+  grep -q "overlay cler1818_full_overlayfs_product " /proc/self/mountinfo || return 1
+  return 0
+}
+
 if [ -d "$OVERLAY_MOD" ] && [ ! -f "$OVERLAY_MOD/disable" ] && [ ! -f "$OVERLAY_MOD/remove" ]; then
+  echo "OverlayFS detected; boot_epoch=$BOOT_EPOCH"
   WAITED=0
-  while [ "$WAITED" -lt 180 ]; do
-    grep -q "健康检查通过" "$OVERLAY_LOG" 2>/dev/null && break
+  STABLE=0
+  while [ "$WAITED" -lt 240 ]; do
+    if overlay_ready; then
+      STABLE=$((STABLE + 1))
+      [ "$STABLE" -ge 3 ] && break
+    else
+      STABLE=0
+    fi
     sleep 2
     WAITED=$((WAITED + 2))
   done
-  sleep 5
+  if [ "$STABLE" -lt 3 ]; then
+    echo "ERROR: OverlayFS was not ready for this boot after ${WAITED}s"
+    exit 1
+  fi
+  echo "OverlayFS ready and stable after ${WAITED}s; settling 8s"
+  sleep 8
 else
+  echo "OverlayFS absent or disabled; normal delayed bind 8s"
   sleep 8
 fi
-[ -f "$FONT" ] || exit 1
 SYSTEM_ALIASES="
 __SYSTEM_ALIASES__
 "
 PRODUCT_ALIASES="
 __PRODUCT_ALIASES__
 "
-SEEN="|"; OK=0; SKIP=0; FAIL=0
+FONT_HASH="$(sha256sum "$FONT" 2>/dev/null | awk '{print $1}')"
+[ -n "$FONT_HASH" ] || { echo "ERROR: cannot hash module font"; exit 1; }
+
+apply_pass() {
+SEEN="|"; OK=0; VERIFIED=0; SKIP=0; FAIL=0
 bind_one() {
   ENTRY="$1"
-  [ -e "$ENTRY" ] || { SKIP=$((SKIP + 1)); return; }
+  [ -e "$ENTRY" ] || { echo "SKIP missing: $ENTRY"; SKIP=$((SKIP + 1)); return; }
   TARGET="$(readlink -f "$ENTRY" 2>/dev/null)"
-  [ -n "$TARGET" ] && [ -f "$TARGET" ] || { SKIP=$((SKIP + 1)); return; }
+  [ -n "$TARGET" ] && [ -f "$TARGET" ] || { echo "SKIP unresolved: $ENTRY"; SKIP=$((SKIP + 1)); return; }
   case "$SEEN" in *"|$TARGET|"*) return ;; esac
   SEEN="${SEEN}${TARGET}|"
-  if mount --bind "$FONT" "$TARGET"; then OK=$((OK + 1)); else FAIL=$((FAIL + 1)); fi
+  BEFORE="$(sha256sum "$TARGET" 2>/dev/null | awk '{print $1}')"
+  if [ "$BEFORE" = "$FONT_HASH" ]; then VERIFIED=$((VERIFIED + 1)); return; fi
+  if mount --bind "$FONT" "$TARGET"; then
+    AFTER="$(sha256sum "$TARGET" 2>/dev/null | awk '{print $1}')"
+    if [ "$AFTER" = "$FONT_HASH" ]; then
+      echo "OK: $ENTRY -> $TARGET"; OK=$((OK + 1))
+    else
+      echo "FAIL verify: $ENTRY -> $TARGET ($AFTER)"; FAIL=$((FAIL + 1))
+    fi
+  else
+    echo "FAIL: $ENTRY -> $TARGET"; FAIL=$((FAIL + 1))
+  fi
 }
 for NAME in $SYSTEM_ALIASES; do bind_one "/system/fonts/$NAME"; done
 for NAME in $PRODUCT_ALIASES; do
   bind_one "/product/fonts/$NAME"
   bind_one "/system/product/fonts/$NAME"
 done
-echo "Completed: ok=$OK skip=$SKIP fail=$FAIL"
+echo "Pass $PASS: ok=$OK verified=$VERIFIED skip=$SKIP fail=$FAIL"
+}
+
+PASS=1
+while [ "$PASS" -le 3 ]; do
+  apply_pass
+  [ "$FAIL" -eq 0 ] && break
+  PASS=$((PASS + 1))
+  [ "$PASS" -le 3 ] && sleep 10
+done
+echo "Completed: pass=$PASS ok=$OK verified=$VERIFIED skip=$SKIP fail=$FAIL font_hash=$FONT_HASH"
 '@
     $service = $serviceTemplate.Replace('__SYSTEM_ALIASES__', ($SystemAliases -join "`n"))
     $service = $service.Replace('__PRODUCT_ALIASES__', ($ProductAliases -join "`n"))

@@ -61,7 +61,9 @@
 
 本机安装的 `cler1818_full_system_overlayfs` 会在开机完成后较晚挂载 `/system`、`/product` 等 OverlayFS。普通 Magisk 字体模块的文件挂载发生得更早，因此可能先显示自定义字体，随后又被 OverlayFS 的系统快照遮住。应用已经缓存的字体还会暂时保留，造成“过一段时间、重新进入页面后恢复默认字体”的现象。
 
-勾选 OverlayFS 延迟兼容模式后，模块根目录的 `service.sh` 会等待 OverlayFS 健康检查完成，再对当前系统中真实存在的字体目标执行延迟 bind mount；符号链接先经 `readlink -f` 解析，并对相同目标去重。执行结果写入模块目录的 `overlay-compat.log`。取消勾选时不生成该脚本。
+勾选 OverlayFS 延迟兼容模式后，模块根目录的 `service.sh` 会确认 OverlayFS 日志更新时间属于本次开机，同时确认 `/system`、`/product` 的实际 OverlayFS 挂载连续稳定，再对真实字体目标执行延迟 bind mount。符号链接经 `readlink -f` 解析并去重；每次绑定后校验 SHA-256，失败最多重试三轮。执行结果写入模块目录的 `overlay-compat.log`。取消勾选时不生成该脚本。
+
+v1.3.0 的已知问题：`overlay.log` 保留旧启动记录时，脚本可能提前约几十秒执行，随后被 OverlayFS 再次遮住。v1.4.0 已通过本次开机日志时间、真实挂载状态和连续稳定检查修复。
 
 该模式专门验证于：
 

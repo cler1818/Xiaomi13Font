@@ -1,10 +1,10 @@
-# Xiaomi13Font v1.3.0
+# Xiaomi13Font v1.4.0
 
 小米 13（fuxi）MIUI 14 / Android 14 全局字体 Magisk 模块生成器。
 
 作者：lzhp529
 
-v1.3.0 严格以最初制作的原始 1.0 六按钮版本为基础，只增加 OverlayFS 延迟兼容模式和字体检查容错。
+v1.4.0 保留最初原始 1.0 的六按钮界面和全部功能，并修复 OverlayFS 旧日志导致延迟挂载提前执行的问题。
 
 ## 原始界面与功能完整保留
 
@@ -41,7 +41,15 @@ GlobalFont.ttf
 OverlayFS 延迟兼容模式（默认开启，可取消）
 ```
 
-勾选后，生成模块包含 `service.sh`。脚本会等待开机完成；如果检测到 `cler1818_full_system_overlayfs`，继续等待其日志出现“健康检查通过”，然后再把模块字体绑定到实际系统字体目标，解决 OverlayFS 晚挂载后小米笔记等应用恢复默认字体的问题。
+勾选后，生成模块包含 `service.sh`。v1.4.0 不再仅搜索日志中的“健康检查通过”，而是同时执行以下检查：
+
+- OverlayFS 日志修改时间必须属于本次开机，避免读取上一次启动遗留的成功记录。
+- `/system` 与 `/product` 的 `cler1818_full_overlayfs` 挂载必须真实存在。
+- 挂载状态连续三次检查稳定后，再额外等待 8 秒。
+- 每个字体目标绑定后立即比较 SHA-256。
+- 校验失败时最多自动重试三轮，每轮间隔 10 秒。
+
+这可以解决 OverlayFS 比字体模块晚几十秒完成，导致小米笔记编辑页、WebView 或后来启动的应用重新使用系统默认字体的问题。
 
 日志位置：
 
@@ -59,7 +67,7 @@ OverlayFS 延迟兼容模式（默认开启，可取消）
 specify a font number between 0 and 1 (inclusive)
 ```
 
-v1.3.0 会改为中文提示：
+v1.4.0 会使用中文提示：
 
 - 检测到多字体集合时，使用第一个字体读取显示名称和基本信息。
 - 生成模块时保留完整原始字体文件，不拆分、不修改。
@@ -70,7 +78,7 @@ v1.3.0 会改为中文提示：
 
 ### 便携 EXE 版
 
-1. 完整解压 `Xiaomi13Font-Portable-v1.3.0.zip`。
+1. 完整解压 `Xiaomi13Font-Portable-v1.4.0.zip`。
 2. 双击 `字体模块生成器.exe`。
 3. 选择 TTF/OTF 字体。
 4. 按需要勾选或取消 OverlayFS 延迟兼容模式。
@@ -105,10 +113,10 @@ MiXplorer 可能向 Magisk 提供无法访问的私有 `content://` 地址，从
 ## 构建
 
 ```powershell
-./build.ps1 -Version 1.3.0
+./build.ps1 -Version 1.4.0
 ```
 
 生成：
 
-- `artifacts/Xiaomi13Font-Portable-v1.3.0.zip`
-- `artifacts/Xiaomi13Font-Script-v1.3.0.zip`
+- `artifacts/Xiaomi13Font-Portable-v1.4.0.zip`
+- `artifacts/Xiaomi13Font-Script-v1.4.0.zip`

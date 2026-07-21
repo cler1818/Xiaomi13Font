@@ -24,7 +24,7 @@ from module_core import (
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 REMOTE_EXPORT_DIR = "/sdcard/Download/FontModules"
 REMOTE_INSTALL_ZIP = "/data/local/tmp/lzhp529-global-font.zip"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 
 def application_dir() -> Path:

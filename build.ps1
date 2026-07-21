@@ -1,4 +1,4 @@
-param([string]$Version = '1.3.0')
+param([string]$Version = '1.4.0')
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
